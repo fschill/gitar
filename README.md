@@ -5,12 +5,12 @@ Graphical git diff tool to compare branches
 Gitar is a tool that provides a side-by-side diff across different branches of a repository. Branches can be compared directly without checkout, gitar will obtain the file contents directly from git without modifying the working copy.
 
 Installation:
-~~~~~~~~~~~~~
+-------------
 
 Copy or link gitar.py into a folder within the path, and give it execution permission (chmod u+x gitar.py).
 
 Usage:
-~~~~~~
+------
 
 path/of/git/repo> gitar.py [branch1] [branch2]
 
