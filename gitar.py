@@ -14,15 +14,15 @@ def aligner(lines1, lines2):
     # pull from/to data and flags from mdiff style iterator
     for fromdata, todata, flag in diffs:
         try:
-            # store HTML markup of the lines into the lists
+            # pad lists with "None" at empty lines to align both sides
             if todata[1].startswith('\0+') and fromdata[1].strip()=="":
-                fromlist.append(None)
+                fromlist.append(None)  # if todata has an extra line, stuff fromlist with None
             else:
-                fromlist.append(fromdata[1])
+                fromlist.append(fromdata[1]) # otherwise append line
             if fromdata[1].startswith('\0-') and todata[1].strip()=="":
-                tolist.append(None)
+                tolist.append(None)    # if fromdata has an extra line, stuff tolist with None
             else:
-                tolist.append(todata[1])
+                tolist.append(todata[1]) # otherwise append line
         except TypeError:
             # exceptions occur for lines where context separators go
             fromlist.append(None)
@@ -31,7 +31,6 @@ def aligner(lines1, lines2):
     #for l in fromlist:
     #    print([l])
     return fromlist, tolist, flaglist
-    #return fromlist, lines2, flaglist
 
 class cd:
     """Context manager for changing the current working directory"""
@@ -90,6 +89,15 @@ def getGitToplevelDir():
         print("not a git directory")
         return ""
 
+def getGitBranches():
+    try:
+        dir = subprocess.check_output('git branch -a', shell=True).decode('utf-8').strip()
+        branches = [b.strip("*").strip() for b in dir.splitlines()]
+        return branches
+    except:
+        print("not a git directory")
+        return ""
+
 def getGitCurrentBranch():
     try:
         dir = subprocess.check_output('git symbolic-ref HEAD --short', shell=True).decode('utf-8').strip()
@@ -102,6 +110,9 @@ def getGitCurrentBranch():
 class EditorWidget(QWidget):
     def __init__(self):
         QWidget.__init__(self)
+        self.lexers={"cpp":QsciLexerCPP(), "python":QsciLexerPython()}
+        self.suffixToLexer={"c":"cpp", "h":"cpp", "cpp":"cpp", "py":"python", "sh":"bash"}
+
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
         self.label = QLabel()
@@ -109,27 +120,42 @@ class EditorWidget(QWidget):
         self.configureEditor(self.editor)
         self.layout.addWidget(self.label)
         self.layout.addWidget(self.editor)
-        
+
+
     def configureEditor(self, editor):
-        self.__lexer = QsciLexerCPP()
+        self.__lexer = self.lexers["cpp"]
         editor.setLexer(self.__lexer)
-        editor.setMarginType(1, QsciScintilla.TextMargin)
-        editor.setMarginType(0, QsciScintilla.SymbolMargin)
+        #editor.setMarginType(1, QsciScintilla.TextMargin)
+        editor.setMarginType(1, QsciScintilla.SymbolMargin)
         editor.setMarginMarkerMask(1, 0b1111)
         editor.setMarginMarkerMask(0, 0b1111)
         editor.setMarginsForegroundColor(QColor("#ffFF8888"))
+        editor.markerDefine(QsciScintilla.Background, 0)
+        editor.setMarkerBackgroundColor(QColor("#22FF8888"),0)
+        editor.setMarkerForegroundColor(QColor("#ffFF8888"),0)
+        editor.markerDefine(QsciScintilla.Rectangle, 1)
+        editor.setMarkerBackgroundColor(QColor("#ffFF8888"),1)
+        editor.setMarkerForegroundColor(QColor("#ffFF8888"),1)
         editor.setUtf8(True)  # Set encoding to UTF-8
         #editor.indicatorDefine(QsciScintilla.FullBoxIndicator, 0)
-        editor.indicatorDefine(QsciScintilla.BoxIndicator, 0)
+        #editor.indicatorDefine(QsciScintilla.BoxIndicator, 0)
+        editor.indicatorDefine(QsciScintilla.StraightBoxIndicator, 0)
+        editor.setIndicatorForegroundColor(QColor("#44FF8888"),0)
         editor.setAnnotationDisplay(QsciScintilla.AnnotationStandard)
 
-    def updateText(self, text,  label=""):
+    def updateText(self, text,  label="", fileSuffix="c"):
+
+        if fileSuffix in self.suffixToLexer.keys():
+            self.__lexer = self.lexers[self.suffixToLexer[fileSuffix]]
+            self.editor.setLexer(self.__lexer)
+            #label+="     ("+self.suffixToLexer[fileSuffix]+")"
         marginTextStyle= QsciStyle()
         marginTextStyle.setPaper(QColor("#ffFF8888"))
         self.editor.setText("")
         self.label.setText(label)
         skipped_lines = 0
         annotation=None
+
         for linenumber, l in enumerate(text):
             idx=linenumber-skipped_lines
             if l is None:
@@ -139,20 +165,49 @@ class EditorWidget(QWidget):
                 else:
                     annotation+="\n<"
                 skipped_lines+=1
-                self.editor.setMarginText(idx, "~", marginTextStyle)
+                #self.editor.setMarginText(idx, "~", marginTextStyle)
+                self.editor.markerAdd(idx, 1)
             else:
                 if annotation is not None:
                     self.editor.annotate(idx-1, annotation, 0)
                     annotation=None
                 if '\0' in l or '\1' in l:
                     self.editor.append(l.replace('\0+', '').replace('\0-', '').replace('\m', '').replace('\0^', '').replace('\1', ''))
-                    self.editor.markerAdd(idx, QsciScintilla.Circle)
-                    self.editor.setMarginText(idx, l[1], marginTextStyle)
+                    self.editor.markerAdd(idx, 0)
+                    self.editor.markerAdd(idx, 1)
+                    #self.editor.setMarginText(idx, l[1], marginTextStyle)
                     self.editor.fillIndicatorRange(idx, l.find('\0'), idx, l.rfind("\1"), 0)
                 else:
                     self.editor.append(l)
 
-        
+class BranchSelector(QWidget):
+    def __init__(self, branches=[], callback=None):
+        QWidget.__init__(self)
+        self.layout = QHBoxLayout()
+        self.setLayout(self.layout)
+        self.branchesMenu = QComboBox()
+        self.branchesMenu.addItems(branches)
+        self.callback = callback
+        self.branchesMenu.currentIndexChanged.connect(self.selectionChange)
+        self.layout.addWidget(self.branchesMenu)
+        self.layout.setContentsMargins(0,0,0,0)
+
+    def setSelection(self, selection):
+        index = self.branchesMenu.findText(selection)
+        print(selection)
+        if index >= 0:
+            self.branchesMenu.setCurrentIndex(index)
+        else:
+            print("selection not found")
+
+    def selectionChange(self, i):
+        if self.callback is not None:
+            self.callback()
+
+    def getCurrentBranch(self):
+        return self.branchesMenu.currentText()
+
+
 class CustomMainWindow(QMainWindow):
 
     def __init__(self):
@@ -161,12 +216,13 @@ class CustomMainWindow(QMainWindow):
         # Window setup
         # --------------
 
-        #self.gitpath = "/home/felix/Hydromea/AUV_Software/Bootloader/Library/"
         self.gitpath = getGitToplevelDir()
         print(self.gitpath)
-        self.filepath = "communication/mavboot.c"
+        self.filepath = ""
         self.branch1 = ""
         self.branch2 = getGitCurrentBranch()
+
+        branches = getGitBranches()
 
         if len(sys.argv)==2:
             self.branch2 = sys.argv[1]
@@ -174,12 +230,6 @@ class CustomMainWindow(QMainWindow):
         if len(sys.argv)==3:
             self.branch1 = sys.argv[1]
             self.branch2 = sys.argv[2]
-
-        #self.branch2 = ""
-        #testfile1 = open("test1.c")
-        #lines1=testfile1.readlines()
-        #testfile2 = open("test2.c")
-        #lines2=testfile2.readlines()
 
 
         # 1. Define the geometry of the main window
@@ -195,13 +245,8 @@ class CustomMainWindow(QMainWindow):
         self.__myFont = QFont()
         self.__myFont.setPointSize(14)
 
-        #create side-by-side view with vertical splitter
-
-        self.comparison_area = QSplitter(Qt.Horizontal)
-
         # File list widget
         self.file_list=QListWidget()
-        self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2)
         self.file_list.currentItemChanged.connect(self.loadFiles)
 
         self.file_view = QDockWidget()
@@ -211,17 +256,27 @@ class CustomMainWindow(QMainWindow):
 
         self.addDockWidget(Qt.LeftDockWidgetArea, self.file_view)
 
-        ignore_list=["hex"]
-        for f in self.files:
-            # if comparing to working copy, only show files that exist locally
-            exist=True
-            size=0
-            if self.branch1=="" or self.branch2=="":
-                exist = os.path.isfile(self.gitpath+f.strip())
-            if exist and not (f.strip().split(".")[-1]  in ignore_list):
-                size=self.calcDiffSize(f)
-            if exist and size>0:
-                self.file_list.addItem(f.strip()+": (%i)"%size)
+        #create side-by-side view with vertical splitter
+
+        self.branchesMenu = QWidget()
+        self.branchesMenuLayout = QHBoxLayout()
+        self.branchesMenu.setLayout(self.branchesMenuLayout)
+        self.branchesMenu.setFixedHeight(50)
+        self.branchesMenuLayout.setContentsMargins(0,0,0,0)
+
+
+        self.leftBranchSelector = BranchSelector(branches = ["", "."]+branches, callback = self.updateBranches)
+        self.rightBranchSelector = BranchSelector(branches = branches, callback = self.updateBranches)
+
+        self.leftBranchSelector.setSelection(self.branch1)
+        self.rightBranchSelector.setSelection(self.branch2)
+
+        self.branchesMenuLayout.addWidget(self.leftBranchSelector)
+        self.branchesMenuLayout.addWidget(self.rightBranchSelector)
+
+        self.comparison_area = QSplitter(Qt.Horizontal)
+
+        self.updateBranches()
 
         # QScintilla editor setup
         # ------------------------
@@ -235,6 +290,7 @@ class CustomMainWindow(QMainWindow):
         self.comparison_area.addWidget(self.right_editor)
 
         # ! Add editor to layout !
+        self.__lyt.addWidget(self.branchesMenu)
         self.__lyt.addWidget(self.comparison_area)
 
         self.show()
@@ -244,7 +300,10 @@ class CustomMainWindow(QMainWindow):
     ''''''
 
     def loadFiles(self, args):
-        self.filepath = args.text().split(":")[0]
+        if args is None:
+            self.filepath = ""
+        else:
+            self.filepath = args.text().split(":")[0]
         self.updateDiffView()
 
     def calcDiffSize(self, filename):
@@ -254,16 +313,40 @@ class CustomMainWindow(QMainWindow):
         return flags.count(True)
 
     def updateDiffView(self):
-        lines1 = getFromGit(self.gitpath, self.branch1, self.filepath)
-        lines2 = getFromGit(self.gitpath, self.branch2, self.filepath)
+        lines1=[""]
+        lines2=[""]
+        if self.filepath is None or self.filepath =="":
+            lines1 = []
+            lines2 = []
+        else:
+            lines1 = getFromGit(self.gitpath, self.branch1, self.filepath)
+            lines2 = getFromGit(self.gitpath, self.branch2, self.filepath)
 
         left, right, flags = aligner(lines1, lines2)
-        self.left_editor.updateText( left,  self.branch1+" : "+self.filepath)
-        self.right_editor.updateText(right, self.branch2+" : "+self.filepath)
+        self.left_editor.updateText( left,  self.branch1+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
+        self.right_editor.updateText(right, self.branch2+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
+
+    def updateBranches(self):
+
+        self.branch1 = str(self.leftBranchSelector.getCurrentBranch())
+        self.branch2 = str(self.rightBranchSelector.getCurrentBranch())
+        print(self.branch1, self.branch2)
+        self.file_list.clear()
+        self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2)
+        print(self.files)
+        ignore_list=["hex"]
+        for f in self.files:
+            # if comparing to working copy, only show files that exist locally
+            exist=True
+            size=0
+            if self.branch1=="" or self.branch2=="":
+                exist = os.path.isfile(self.gitpath+f.strip())
+            if exist and not (f.strip().split(".")[-1]  in ignore_list):
+                size=self.calcDiffSize(f)
+            if exist and size>0:
+                self.file_list.addItem(f.strip()+": (%i)"%size)
 
 
-    def __btn_action(self):
-        self.right_editor.setFirstVisibleLine(self.left_editor.firstVisibleLine())
 
     ''''''
 
