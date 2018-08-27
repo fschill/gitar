@@ -151,6 +151,7 @@ class EditorWidget(QWidget):
             #label+="     ("+self.suffixToLexer[fileSuffix]+")"
         marginTextStyle= QsciStyle()
         marginTextStyle.setPaper(QColor("#ffFF8888"))
+        self.editor.clearAnnotations(-1)
         self.editor.setText("")
         self.label.setText(label)
         skipped_lines = 0
@@ -168,17 +169,26 @@ class EditorWidget(QWidget):
                 #self.editor.setMarginText(idx, "~", marginTextStyle)
                 self.editor.markerAdd(idx, 1)
             else:
-                if annotation is not None:
-                    self.editor.annotate(idx-1, annotation, 0)
-                    annotation=None
+
                 if '\0' in l or '\1' in l:
                     self.editor.append(l.replace('\0+', '').replace('\0-', '').replace('\m', '').replace('\0^', '').replace('\1', ''))
                     self.editor.markerAdd(idx, 0)
                     self.editor.markerAdd(idx, 1)
                     #self.editor.setMarginText(idx, l[1], marginTextStyle)
-                    self.editor.fillIndicatorRange(idx, l.find('\0'), idx, l.rfind("\1"), 0)
+                    ind_left = l.find('\0')
+                    ind_right = l.rfind("\1")
+                    #print(ind_left, ind_right, len(l))
+                    self.editor.fillIndicatorRange(idx, ind_left, idx, ind_right, 0)
                 else:
                     self.editor.append(l)
+
+                if annotation is not None:
+                    if (idx>0):
+                        self.editor.annotate(idx-1, annotation, 0)
+                    else:
+                        #self.editor.append("\n")
+                        self.editor.annotate(idx, annotation, 0)
+                    annotation=None
 
 class BranchSelector(QWidget):
     def __init__(self, branches=[], callback=None):
