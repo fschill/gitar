@@ -61,7 +61,7 @@ def getFromGit(path_to_repository, branchname, filepath):
         #print("file error")
         return ""
 
-def getChangedFilesFromGit(path_to_repository, branch1, branch2):
+def getChangedFilesFromGit(path_to_repository, branch1, branch2, locallyChangedOnly=False):
     lines=""
     try:
         with cd(path_to_repository):
@@ -74,12 +74,24 @@ def getChangedFilesFromGit(path_to_repository, branch1, branch2):
                     branch1  = getGitCurrentBranch()
                 if branch2==".":
                     branch2  = getGitCurrentBranch()
-                lines = subprocess.check_output('git diff --name-only %s...%s' % (branch1, branch2), shell=True).decode(
+                if locallyChangedOnly:
+                    lines = subprocess.check_output('git diff --name-only %s...%s' % (branch1, branch2), shell=True).decode(
                     'utf-8').splitlines()
+                else:
+                    lines = subprocess.check_output('git diff --name-only %s %s' % (branch1, branch2), shell=True).decode(
+                        'utf-8').splitlines()
         return [l+"\n" for l in  lines]
     except:
         print("not a git directory")
         return subprocess.check_output("ls", shell=True).decode('utf-8').splitlines()
+
+def runCommand(commandString):
+    try:
+        output = subprocess.check_output(commandString, shell=True).decode('utf-8').strip()
+        return output
+    except:
+        print("Error running command:", commandString)
+        return ""
 
 def getGitToplevelDir():
     try:
@@ -90,22 +102,32 @@ def getGitToplevelDir():
         return ""
 
 def getGitBranches():
-    try:
-        dir = subprocess.check_output('git branch -a', shell=True).decode('utf-8').strip()
-        branches = [b.strip("*").strip() for b in dir.splitlines()]
-        return branches
-    except:
-        print("not a git directory")
-        return ""
+    dir = runCommand('git branch -a')
+    branches = [b.strip("*").strip() for b in dir.splitlines()]
+    return branches
 
 def getGitCurrentBranch():
-    try:
-        dir = subprocess.check_output('git symbolic-ref HEAD --short', shell=True).decode('utf-8').strip()
-        return dir
-    except:
-        print("not a git directory")
-        return ""
+    dir = runCommand('git symbolic-ref HEAD --short')
+    return dir
 
+def getGitLog(branch="", file=""):
+    output = runCommand('git log --pretty=format:"%H %aI %an: %s" ' + branch + ' -- '+file)
+    log = []
+    for l in output.splitlines():
+        fields = l.split()
+        commit = fields[0]
+        date = fields[1]
+        rest = " ".join(l.split()[2:])
+        author = rest.split(":")[0]
+        message = ":".join(rest.split(":")[1:])
+        log.append((commit, date, author, message))
+    return log
+
+def abbreviateString(s, length=40):
+    if len(s)>length:
+        return s[:length]+".."
+    else:
+        return s
 
 class EditorWidget(QWidget):
     def __init__(self):
@@ -193,14 +215,28 @@ class EditorWidget(QWidget):
 class BranchSelector(QWidget):
     def __init__(self, branches=[], callback=None):
         QWidget.__init__(self)
-        self.layout = QHBoxLayout()
+        self.layout = QVBoxLayout()
+        self.menuWidget = QWidget()
+        self.menulayout = QHBoxLayout()
         self.setLayout(self.layout)
+        self.menuWidget.setLayout(self.menulayout)
         self.branchesMenu = QComboBox()
         self.branchesMenu.addItems(branches)
         self.callback = callback
         self.branchesMenu.currentIndexChanged.connect(self.selectionChange)
-        self.layout.addWidget(self.branchesMenu)
+        self.commitMenu = QComboBox()
+        self.commitMenu.currentIndexChanged.connect(self.commitChange)
+        self.commitMenu.setMaxVisibleItems(15)
+        self.commitSlider = QSlider(Qt.Horizontal)
+        self.commitSlider.setTickInterval(1)
+        self.commitSlider.setTickPosition(QSlider.TicksBothSides)
+        self.menulayout.addWidget(self.branchesMenu)
+        self.menulayout.addWidget(self.commitMenu)
+        self.layout.addWidget(self.menuWidget)
+        #self.layout.addWidget(self.commitSlider)
+        self.menulayout.setContentsMargins(0,0,0,0)
         self.layout.setContentsMargins(0,0,0,0)
+        self.gitlog = None
 
     def setSelection(self, selection):
         index = self.branchesMenu.findText(selection)
@@ -211,17 +247,63 @@ class BranchSelector(QWidget):
             print("selection not found")
 
     def selectionChange(self, i):
+        self.gitlog = getGitLog(branch=self.getCurrentBranch())
+        self.commitMenu.clear()
+        self.commitMenu.addItems([abbreviateString(log[2]+": "+log[3], length=50) for log in self.gitlog])
+        for i in range(0, len(self.gitlog)):
+            self.commitMenu.setItemData(i, self.gitlog[i][1]+" - "+self.gitlog[i][2]+": "+self.gitlog[i][3], Qt.ToolTipRole)
+
+        self.commitSlider.setMinimum(0)
+        self.commitSlider.setMaximum(len(self.gitlog))
+        if self.callback is not None:
+            self.callback()
+
+    def commitChange(self, i):
         if self.callback is not None:
             self.callback()
 
     def getCurrentBranch(self):
-        return self.branchesMenu.currentText()
+        #return self.branchesMenu.currentText()
+        if self.gitlog is not None:
+            return self.gitlog[self.commitMenu.currentIndex()][0]
+        else:
+            return self.branchesMenu.currentText()
+
+
+class FileListUpdateThread(QThread):
+    entryChanged = pyqtSignal(int, int)
+
+    def __init__(self, mainWindow):
+        QThread.__init__(self)
+        self.mainWindow = mainWindow
+        self.restart=False
+
+    def run(self):
+        print("thread start")
+        self.restart=True
+        while self.restart:
+            self.restart = False
+            for i in range(0, self.mainWindow.file_list.count()):
+                try:
+                    file = self.mainWindow.file_list.item(i).text().split(":")[0]
+                except:
+                    restart=True
+                    break
+                size = self.mainWindow.calcDiffSize(file)
+                print (file, size)
+                self.entryChanged.emit(i, size)
+                #check if we need to restart
+                if self.restart:
+                    break
+        print("thread end")
 
 
 class CustomMainWindow(QMainWindow):
 
     def __init__(self):
         super(CustomMainWindow, self).__init__()
+
+        self.updateThread = FileListUpdateThread(self)
 
         # Window setup
         # --------------
@@ -258,6 +340,7 @@ class CustomMainWindow(QMainWindow):
         # File list widget
         self.file_list=QListWidget()
         self.file_list.currentItemChanged.connect(self.loadFiles)
+        self.updateThread.entryChanged.connect(self.updateDiffSize)
 
         self.file_view = QDockWidget()
         #self.file_view_layout = QVBoxLayout()
@@ -286,8 +369,6 @@ class CustomMainWindow(QMainWindow):
 
         self.comparison_area = QSplitter(Qt.Horizontal)
 
-        self.updateBranches()
-
         # QScintilla editor setup
         # ------------------------
 
@@ -307,11 +388,14 @@ class CustomMainWindow(QMainWindow):
 
         self.left_editor.editor.verticalScrollBar().valueChanged.connect( self.right_editor.editor.verticalScrollBar().setValue)
 
+        self.updateBranches()
+
     ''''''
 
     def loadFiles(self, args):
         if args is None:
-            self.filepath = ""
+            #self.filepath = ""
+            pass
         else:
             self.filepath = args.text().split(":")[0]
         self.updateDiffView()
@@ -321,6 +405,11 @@ class CustomMainWindow(QMainWindow):
         lines2 = getFromGit(self.gitpath, self.branch2, filename)
         left, right, flags = aligner(lines1, lines2)
         return flags.count(True)
+
+    def updateDiffSize(self, i, size):
+        item = self.file_list.item(i)
+        if item is not None:
+            item.setText(self.files[i].strip()+": (%i)"%size)
 
     def updateDiffView(self):
         lines1=[""]
@@ -337,13 +426,15 @@ class CustomMainWindow(QMainWindow):
         self.right_editor.updateText(right, self.branch2+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
 
     def updateBranches(self):
+        # store editor file position
+        editorPosition = self.left_editor.editor.verticalScrollBar().value()
 
         self.branch1 = str(self.leftBranchSelector.getCurrentBranch())
         self.branch2 = str(self.rightBranchSelector.getCurrentBranch())
         print(self.branch1, self.branch2)
         self.file_list.clear()
         self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2)
-        print(self.files)
+        #print(self.files)
         ignore_list=["hex"]
         for f in self.files:
             # if comparing to working copy, only show files that exist locally
@@ -351,12 +442,23 @@ class CustomMainWindow(QMainWindow):
             size=0
             if self.branch1=="" or self.branch2=="":
                 exist = os.path.isfile(self.gitpath+f.strip())
-            if exist and not (f.strip().split(".")[-1]  in ignore_list):
-                size=self.calcDiffSize(f)
-            if exist and size>0:
-                self.file_list.addItem(f.strip()+": (%i)"%size)
 
+            #if exist and not (f.strip().split(".")[-1]  in ignore_list):
+            #    size=self.calcDiffSize(f)
+            if exist:
+                self.file_list.addItem(f.strip()+": (...)")
 
+        # check if previously selected file is still there
+        filenames = [fn.split(":")[0].strip() for fn in self.files]
+        if self.filepath in filenames:
+            print("reselect file " + self.filepath)
+            findex = filenames.index(self.filepath)
+            self.file_list.setCurrentRow(findex)
+            self.updateDiffView()
+            # reset editor scroll position
+            self.left_editor.editor.verticalScrollBar().setValue(editorPosition)
+        self.updateThread.restart=True
+        self.updateThread.start()
 
     ''''''
 
