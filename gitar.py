@@ -247,8 +247,9 @@ class BranchSelector(QWidget):
             print("selection not found")
 
     def selectionChange(self, i):
-        self.gitlog = getGitLog(branch=self.getCurrentBranch())
+        self.gitlog = getGitLog(branch=self.branchesMenu.currentText())
         self.commitMenu.clear()
+        print(self.gitlog[0])
         self.commitMenu.addItems([abbreviateString(log[2]+": "+log[3], length=50) for log in self.gitlog])
         for i in range(0, len(self.gitlog)):
             self.commitMenu.setItemData(i, self.gitlog[i][1]+" - "+self.gitlog[i][2]+": "+self.gitlog[i][3], Qt.ToolTipRole)
@@ -279,7 +280,7 @@ class FileListUpdateThread(QThread):
         self.restart=False
 
     def run(self):
-        print("thread start")
+        #print("thread start")
         self.restart=True
         while self.restart:
             self.restart = False
@@ -295,7 +296,7 @@ class FileListUpdateThread(QThread):
                 #check if we need to restart
                 if self.restart:
                     break
-        print("thread end")
+        #print("thread end")
 
 
 class CustomMainWindow(QMainWindow):
