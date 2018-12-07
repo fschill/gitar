@@ -75,7 +75,7 @@ def getChangedFilesFromGit(path_to_repository, branch1, branch2, locallyChangedO
                 if branch2==".":
                     branch2  = getGitCurrentBranch()
                 if locallyChangedOnly:
-                    lines = subprocess.check_output('git diff --name-only %s...%s' % (branch1, branch2), shell=True).decode(
+                    lines = subprocess.check_output('git diff --name-only %s...%s' % (branch2, branch1), shell=True).decode(
                     'utf-8').splitlines()
                 else:
                     lines = subprocess.check_output('git diff --name-only %s %s' % (branch1, branch2), shell=True).decode(
@@ -249,6 +249,8 @@ class BranchSelector(QWidget):
     def selectionChange(self, i):
         self.gitlog = getGitLog(branch=self.branchesMenu.currentText())
         self.commitMenu.clear()
+        if len(self.gitlog) == 0:
+            return
         print(self.gitlog[0])
         self.commitMenu.addItems([abbreviateString(log[2]+": "+log[3], length=50) for log in self.gitlog])
         for i in range(0, len(self.gitlog)):
@@ -326,7 +328,7 @@ class CustomMainWindow(QMainWindow):
 
 
         # 1. Define the geometry of the main window
-        self.setGeometry(200, 200, 1200, 800)
+        self.setGeometry(200, 100, 1600, 800)
         self.setWindowTitle("Gitar")
 
         # 2. Create frame and layout
@@ -343,12 +345,17 @@ class CustomMainWindow(QMainWindow):
         self.file_list.currentItemChanged.connect(self.loadFiles)
         self.updateThread.entryChanged.connect(self.updateDiffSize)
 
-        self.file_view = QDockWidget()
-        #self.file_view_layout = QVBoxLayout()
-        #self.file_view.setLayout(self.file_view_layout)
-        self.file_view.setWidget(self.file_list)
+        self.localChangesCheckbox = QCheckBox("Local changes only")
 
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.file_view)
+        self.file_view = QWidget()
+        self.file_view_layout = QVBoxLayout()
+        self.file_view.setLayout(self.file_view_layout)
+        self.file_view_layout.addWidget(self.localChangesCheckbox)
+        self.file_view_layout.addWidget(self.file_list)
+
+        self.file_view_dock = QDockWidget()
+        self.file_view_dock.setWidget(self.file_view)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.file_view_dock)
 
         #create side-by-side view with vertical splitter
 
@@ -388,6 +395,7 @@ class CustomMainWindow(QMainWindow):
         self.show()
 
         self.left_editor.editor.verticalScrollBar().valueChanged.connect( self.right_editor.editor.verticalScrollBar().setValue)
+        self.localChangesCheckbox.stateChanged.connect(self.updateBranches)
 
         self.updateBranches()
 
@@ -426,7 +434,7 @@ class CustomMainWindow(QMainWindow):
         self.left_editor.updateText( left,  self.branch1+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
         self.right_editor.updateText(right, self.branch2+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
 
-    def updateBranches(self):
+    def updateBranches(self, *args):
         # store editor file position
         editorPosition = self.left_editor.editor.verticalScrollBar().value()
 
@@ -434,7 +442,7 @@ class CustomMainWindow(QMainWindow):
         self.branch2 = str(self.rightBranchSelector.getCurrentBranch())
         print(self.branch1, self.branch2)
         self.file_list.clear()
-        self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2)
+        self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2, locallyChangedOnly=self.localChangesCheckbox.isChecked())
         #print(self.files)
         ignore_list=["hex"]
         for f in self.files:
