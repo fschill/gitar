@@ -247,7 +247,13 @@ class BranchSelector(QWidget):
             print("selection not found")
 
     def selectionChange(self, i):
-        self.gitlog = getGitLog(branch=self.branchesMenu.currentText())
+        selectedBranch = self.branchesMenu.currentText()
+        if selectedBranch ==".":
+            selectedBranch = getGitCurrentBranch()
+        if selectedBranch == "":
+            self.gitlog = None
+        else:
+            self.gitlog = getGitLog(branch=selectedBranch)
         self.commitMenu.clear()
         if len(self.gitlog) == 0:
             return
