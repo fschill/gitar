@@ -130,18 +130,34 @@ def abbreviateString(s, length=40):
         return s
 
 class EditorWidget(QWidget):
-    def __init__(self):
+    def __init__(self, parent=None):
         QWidget.__init__(self)
+        self.parent=parent
         self.lexers={"cpp":QsciLexerCPP(), "python":QsciLexerPython()}
         self.suffixToLexer={"c":"cpp", "h":"cpp", "cpp":"cpp", "py":"python", "sh":"bash"}
 
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
+        self.toolbar=QWidget()
+        self.toolbarLayout = QHBoxLayout()
+        self.toolbar.setLayout(self.toolbarLayout)
         self.label = QLabel()
         self.editor = QsciScintilla()
         self.configureEditor(self.editor)
-        self.layout.addWidget(self.label)
+        self.filename=None
+        self.saveButton = QPushButton("save")
+        self.saveButton.clicked.connect(self.saveText)
+
+        self.toolbarLayout.addWidget(self.label)
+        self.toolbarLayout.addWidget(self.saveButton)
+        self.layout.addWidget(self.toolbar)
         self.layout.addWidget(self.editor)
+
+        self.toolbarLayout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+        if parent is not None: # connect to update for text change
+            self.editor.textChanged.connect(self.parent.updateAfterEdit)
 
 
     def configureEditor(self, editor):
@@ -165,8 +181,17 @@ class EditorWidget(QWidget):
         editor.setIndicatorForegroundColor(QColor("#44FF8888"),0)
         editor.setAnnotationDisplay(QsciScintilla.AnnotationStandard)
 
-    def updateText(self, text,  label="", fileSuffix="c"):
-
+    def updateText(self, text, branch, filename, fileSuffix="c"):
+        self.editor.blockSignals(True) # turn off signals to avoid update loops
+        self.branch = branch
+        firstLine = 0
+        cursorLine = 0
+        cursorIndex = 0
+        if self.filename == filename: # if it's still the same file, keep scroll and cursor position
+            firstLine = self.editor.firstVisibleLine()
+            cursorLine, cursorIndex = self.editor.getCursorPosition()
+        self.filename = filename # store filename
+        label = branch+":"+filename
         if fileSuffix in self.suffixToLexer.keys():
             self.__lexer = self.lexers[self.suffixToLexer[fileSuffix]]
             self.editor.setLexer(self.__lexer)
@@ -211,6 +236,20 @@ class EditorWidget(QWidget):
                         #self.editor.append("\n")
                         self.editor.annotate(idx, annotation, 0)
                     annotation=None
+        self.editor.setFirstVisibleLine(firstLine)
+        self.editor.setCursorPosition(cursorLine, cursorIndex)
+        self.editor.blockSignals(False) # turn signals on again
+
+    def getText(self):
+        return self.editor.text().splitlines(True)
+
+    def saveText(self):
+        if self.branch == "":
+            f=open(self.filename, "w")
+            f.write(self.editor.text())
+            print("saved ", self.filename)
+            self.parent.updateDiffView()
+
 
 class BranchSelector(QWidget):
     def __init__(self, branches=[], callback=None):
@@ -255,7 +294,7 @@ class BranchSelector(QWidget):
         else:
             self.gitlog = getGitLog(branch=selectedBranch)
         self.commitMenu.clear()
-        if len(self.gitlog) == 0:
+        if self.gitlog is None or len(self.gitlog) == 0:
             return
         print(self.gitlog[0])
         self.commitMenu.addItems([abbreviateString(log[2]+": "+log[3], length=50) for log in self.gitlog])
@@ -387,9 +426,9 @@ class CustomMainWindow(QMainWindow):
         # ------------------------
 
         # ! Make instance of QsciScintilla class!
-        self.left_editor = EditorWidget()
+        self.left_editor = EditorWidget(parent=self)
 
-        self.right_editor = EditorWidget()
+        self.right_editor = EditorWidget(parent=self)
 
         self.comparison_area.addWidget(self.left_editor)
         self.comparison_area.addWidget(self.right_editor)
@@ -435,10 +474,16 @@ class CustomMainWindow(QMainWindow):
         else:
             lines1 = getFromGit(self.gitpath, self.branch1, self.filepath)
             lines2 = getFromGit(self.gitpath, self.branch2, self.filepath)
-
         left, right, flags = aligner(lines1, lines2)
-        self.left_editor.updateText( left,  self.branch1+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
-        self.right_editor.updateText(right, self.branch2+" : "+self.filepath, fileSuffix=self.filepath.split(".")[-1])
+        self.left_editor.updateText( left,  self.branch1, self.filepath, fileSuffix=self.filepath.split(".")[-1])
+        self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
+
+    def updateAfterEdit(self):
+        lines1 = self.left_editor.getText()
+        lines2 = self.right_editor.getText()
+        left, right, flags = aligner(lines1, lines2)
+        self.left_editor.updateText( left,  self.branch1, self.filepath, fileSuffix=self.filepath.split(".")[-1])
+        self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
 
     def updateBranches(self, *args):
         # store editor file position
