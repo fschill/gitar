@@ -146,10 +146,12 @@ class EditorWidget(QWidget):
         self.configureEditor(self.editor)
         self.filename=None
         self.saveButton = QPushButton("save")
+        self.saveButton.setFixedWidth(80)
+        self.saveButton.setDisabled(True)
         self.saveButton.clicked.connect(self.saveText)
 
-        self.toolbarLayout.addWidget(self.label)
         self.toolbarLayout.addWidget(self.saveButton)
+        self.toolbarLayout.addWidget(self.label)
         self.layout.addWidget(self.toolbar)
         self.layout.addWidget(self.editor)
 
@@ -184,6 +186,14 @@ class EditorWidget(QWidget):
     def updateText(self, text, branch, filename, fileSuffix="c"):
         self.editor.blockSignals(True) # turn off signals to avoid update loops
         self.branch = branch
+        if self.branch == "":
+            self.saveButton.setText("save")
+            self.saveButton.setDisabled(False)
+
+        else:
+            self.saveButton.setText("checkout")
+            self.saveButton.setDisabled(False)
+
         firstLine = 0
         cursorLine = 0
         cursorIndex = 0
@@ -388,6 +398,7 @@ class CustomMainWindow(QMainWindow):
         # File list widget
         self.file_list=QListWidget()
         self.file_list.currentItemChanged.connect(self.loadFiles)
+        self.file_list.clicked.connect(self.updateDiffView)
         self.updateThread.entryChanged.connect(self.updateDiffSize)
 
         self.localChangesCheckbox = QCheckBox("Local changes only")
@@ -399,6 +410,7 @@ class CustomMainWindow(QMainWindow):
         self.file_view_layout.addWidget(self.file_list)
 
         self.file_view_dock = QDockWidget()
+        self.file_view_dock.setFeatures(QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetMovable)
         self.file_view_dock.setWidget(self.file_view)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.file_view_dock)
 
