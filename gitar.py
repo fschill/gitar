@@ -86,6 +86,12 @@ def getChangedFilesFromGit(path_to_repository, branch1, branch2, locallyChangedO
         print("not a git directory")
         return subprocess.check_output("ls", shell=True).decode('utf-8').splitlines()
 
+def getDivergedFiles(path_to_repository, branch1, branch2):
+    set1 = getChangedFilesFromGit(path_to_repository, branch1, branch2, True)
+    set2 = getChangedFilesFromGit(path_to_repository, branch2, branch1, True)
+    combined = [value for value in set1 if value in set2]
+    return combined 
+
 def runCommand(commandString):
     try:
         output = subprocess.check_output(commandString, shell=True).decode('utf-8').strip()
@@ -403,11 +409,13 @@ class CustomMainWindow(QMainWindow):
         self.updateThread.entryChanged.connect(self.updateDiffSize)
 
         self.localChangesCheckbox = QCheckBox("Local changes only")
+        self.divergedCheckbox = QCheckBox("diverged files only")
 
         self.file_view = QWidget()
         self.file_view_layout = QVBoxLayout()
         self.file_view.setLayout(self.file_view_layout)
         self.file_view_layout.addWidget(self.localChangesCheckbox)
+        self.file_view_layout.addWidget(self.divergedCheckbox)
         self.file_view_layout.addWidget(self.file_list)
 
         self.file_view_dock = QDockWidget()
@@ -454,7 +462,7 @@ class CustomMainWindow(QMainWindow):
 
         self.left_editor.editor.verticalScrollBar().valueChanged.connect( self.right_editor.editor.verticalScrollBar().setValue)
         self.localChangesCheckbox.stateChanged.connect(self.updateBranches)
-
+        self.divergedCheckbox.stateChanged.connect(self.updateBranches)
         self.updateBranches()
 
     ''''''
@@ -506,7 +514,11 @@ class CustomMainWindow(QMainWindow):
         self.branch2 = str(self.rightBranchSelector.getCurrentBranch())
         print(self.branch1, self.branch2)
         self.file_list.clear()
-        self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2, locallyChangedOnly=self.localChangesCheckbox.isChecked())
+        if self.divergedCheckbox.isChecked():
+            self.files = getDivergedFiles(self.gitpath, self.branch1, self.branch2)
+        else:
+            self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2, locallyChangedOnly=self.localChangesCheckbox.isChecked())
+            
         #print(self.files)
         ignore_list=["hex"]
         for f in self.files:
