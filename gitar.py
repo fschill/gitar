@@ -8,6 +8,7 @@ from PyQt5.Qsci import *
 
 import difflib
 import os, sys, subprocess,  os.path
+import re
 
 def aligner(lines1, lines2):
     diffs = difflib._mdiff(lines1, lines2)
@@ -135,6 +136,17 @@ def abbreviateString(s, length=40):
         return s[:length]+".."
     else:
         return s
+        
+def getGitBlame(branch = "", file=""):
+    re_blame = re.compile(r"([0-9a-f]+)[\s]+\(([a-zA-Z\s+]+)\s+(\d+\-\d+-\d+)\s(\d+\:\d+\:\d+)\s([\+\-0-9]+)\s+(\d+)\)(.*)")
+    
+    
+    output = runCommand('git blame -c ' + branch + ' -- '+file)
+    output = output.splitlines()
+    
+    for ln, l in enumerate(output):
+        parse = re_blame.match(l).groups()
+        print(ln,": ", parse)
 
 class EditorWidget(QWidget):
     def __init__(self, parent=None):
@@ -152,13 +164,18 @@ class EditorWidget(QWidget):
         self.editor = QsciScintilla()
         self.configureEditor(self.editor)
         self.filename=None
+        self.rawText=None
         self.saveButton = QPushButton("save")
         self.saveButton.setFixedWidth(80)
         self.saveButton.setDisabled(True)
         self.saveButton.clicked.connect(self.saveText)
 
+        self.annotateCheckbox = QCheckBox("annotation")
+        self.annotateCheckbox.stateChanged.connect(self.refreshText)
+
         self.toolbarLayout.addWidget(self.saveButton)
         self.toolbarLayout.addWidget(self.label)
+        self.toolbarLayout.addWidget(self.annotateCheckbox)
         self.layout.addWidget(self.toolbar)
         self.layout.addWidget(self.editor)
 
@@ -190,9 +207,17 @@ class EditorWidget(QWidget):
         editor.setIndicatorForegroundColor(QColor("#44FF8888"),0)
         editor.setAnnotationDisplay(QsciScintilla.AnnotationStandard)
 
+    def refreshText(self):
+        self.updateText(self.rawText, self.branch, self.filename)
+
     def updateText(self, text, branch, filename, fileSuffix="c"):
         self.editor.blockSignals(True) # turn off signals to avoid update loops
         self.branch = branch
+        self.rawText = text
+        annotate = self.annotateCheckbox.isChecked()
+        if annotate:
+            getGitBlame(self.branch, filename)
+        
         if self.branch == "":
             self.saveButton.setText("save")
             self.saveButton.setDisabled(False)
@@ -390,7 +415,7 @@ class CustomMainWindow(QMainWindow):
 
 
         # 1. Define the geometry of the main window
-        self.setGeometry(200, 100, 1600, 800)
+        self.setGeometry(200, 100, 1900, 900)
         self.setWindowTitle("Gitar")
 
         # 2. Create frame and layout
