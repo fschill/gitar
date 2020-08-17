@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+from __future__ import generator_stop
 import sys
 from PyQt5 import Qt
 from PyQt5.QtWidgets import *
@@ -11,10 +12,50 @@ import os, sys, subprocess,  os.path
 import re
 from collections import defaultdict
 
+import traceback
+import time 
+
+import multiprocessing
+from multiprocessing import Process, Queue
+import functools
+
+def result_as_param(func, queue, *args, **kwargs):
+    result = (func(*args, **kwargs))
+    queue.put(result)
+    print("returned. Result=", len(result))
+
+def timeout(max_timeout):
+    """Timeout decorator, parameter in seconds."""
+    def timeout_decorator(item):
+        """Wrap the original function."""
+        @functools.wraps(item)
+        def func_wrapper(*args, **kwargs):
+            """Closure for function."""
+            queue = Queue()
+            p = multiprocessing.Process(target=result_as_param, args=[item, queue]+list(args), kwargs=kwargs)
+            p.start()
+
+            # Wait for timeout or until process finishes
+            p.join(max_timeout)
+            result = None
+            try:
+                result =  queue.get(timeout = max_timeout)
+            except:
+                print("time out!")
+                p.terminate()
+            p.join()
+            return result
+            
+            
+        return func_wrapper
+    return timeout_decorator
+    
+@timeout(0.5)  
 def aligner(lines1, lines2):
     diffs = difflib._mdiff(lines1, lines2)
     fromlist, tolist, flaglist = [], [], []
     # pull from/to data and flags from mdiff style iterator
+    itercount = 0
     for fromdata, todata, flag in diffs:
         try:
             # pad lists with "None" at empty lines to align both sides
@@ -22,17 +63,21 @@ def aligner(lines1, lines2):
                 fromlist.append(None)  # if todata has an extra line, stuff fromlist with None
             else:
                 fromlist.append(fromdata[1]) # otherwise append line
+                
             if fromdata[1].startswith('\0-') and todata[1].strip()=="":
                 tolist.append(None)    # if fromdata has an extra line, stuff tolist with None
             else:
                 tolist.append(todata[1]) # otherwise append line
+            
         except TypeError:
             # exceptions occur for lines where context separators go
             fromlist.append(None)
             tolist.append(None)
         flaglist.append(flag)
+            
     #for l in fromlist:
     #    print([l])
+    print("aligner done")
     return fromlist, tolist, flaglist
 
 class cd:
@@ -118,6 +163,10 @@ def getGitBranches():
 def getGitCurrentBranch():
     dir = runCommand('git symbolic-ref HEAD --short')
     return dir
+
+def getGitBranchOfCommit(commitHash):
+    branch = runCommand('git name-rev %s'%commitHash).split()[1]
+    return branch.split('~')[0]
 
 def getGitLog(branch="", file=""):
     output = runCommand('git log --pretty=format:"%H %aI %an: %s" ' + branch + ' -- '+file)
@@ -265,7 +314,10 @@ class EditorWidget(QWidget):
         if self.blame is not None:
             ln = self.blame[line_nr]
             print(line_nr, ln.commit, ln.date, ln.time, ln.author)
+            branchName = getGitBranchOfCommit(ln.commit)
+            print("commit is on branch", branchName)
             self.parent.branch2 = ln.commit
+            self.parent.rightBranchSelector.setSelection(branchName)
             self.parent.rightBranchSelector.setCommit(ln.commit)
             self.parent.updateDiffView()
 
@@ -424,8 +476,8 @@ class BranchSelector(QWidget):
 
     def setSelection(self, selection):
         index = self.branchesMenu.findText(selection)
-        print(selection)
-        if index >= 0:
+        print("found selection", selection)
+        if index >= 0 and index!=self.commitMenu.currentIndex():
             self.branchesMenu.setCurrentIndex(index)
         else:
             print("selection not found")
@@ -438,7 +490,7 @@ class BranchSelector(QWidget):
         else:
             print("commit not found", commit)
 
-    def selectionChange(self, i):
+    def updateCommitMenu(self):
         selectedBranch = self.branchesMenu.currentText()
         if selectedBranch ==".":
             selectedBranch = getGitCurrentBranch()
@@ -446,6 +498,8 @@ class BranchSelector(QWidget):
             self.gitlog = None
         else:
             self.gitlog = getGitLog(branch=selectedBranch)
+        print ("updating commit list...")
+        self.commitMenu.blockSignals(True)
         self.commitMenu.clear()
         if self.gitlog is None or len(self.gitlog) == 0:
             return
@@ -454,8 +508,12 @@ class BranchSelector(QWidget):
         for i in range(0, len(self.gitlog)):
             self.commitMenu.setItemData(i, self.gitlog[i][1]+" - "+self.gitlog[i][2]+": "+self.gitlog[i][3], Qt.ToolTipRole)
 
+        self.commitMenu.blockSignals(False)
         self.commitSlider.setMinimum(0)
         self.commitSlider.setMaximum(len(self.gitlog))
+
+    def selectionChange(self, i):
+        self.updateCommitMenu()
         if self.callback is not None:
             self.callback()
 
@@ -478,25 +536,31 @@ class FileListUpdateThread(QThread):
         QThread.__init__(self)
         self.mainWindow = mainWindow
         self.restart=False
+        self.stop = False
 
     def run(self):
-        #print("thread start")
+        print("thread start")
         self.restart=True
-        while self.restart:
-            self.restart = False
-            for i in range(0, self.mainWindow.file_list.count()):
-                try:
-                    file = self.mainWindow.file_list.item(i).text().split(":")[0]
-                except:
-                    restart=True
-                    break
-                size = self.mainWindow.calcDiffSize(file)
-                print (file, size)
+        #while self.restart:
+        self.restart=False
+        for i in range(0, self.mainWindow.file_list.count()):
+            try:
+                f = self.mainWindow.file_list.item(i).text().split(":")[0]
+            except:
+                restart=True
+                break
+            print ("processing", f)
+            try:
+                size = self.mainWindow.calcDiffSize(f)
+                print (f, size)
                 self.entryChanged.emit(i, size)
-                #check if we need to restart
-                if self.restart:
-                    break
-        #print("thread end")
+            except:
+                print("error calculating diff size")
+            #check if we need to restart
+            if self.restart:
+                break
+    
+        print("thread end")
 
 
 class CustomMainWindow(QMainWindow):
@@ -561,6 +625,20 @@ class CustomMainWindow(QMainWindow):
 
         #create side-by-side view with vertical splitter
 
+        self.comparison_area = QSplitter(Qt.Horizontal)
+
+        # QScintilla editor setup
+        # ------------------------
+
+        # ! Make instance of QsciScintilla class!
+        self.left_editor = EditorWidget(parent=self)
+
+        self.right_editor = EditorWidget(parent=self)
+
+        self.comparison_area.addWidget(self.left_editor)
+        self.comparison_area.addWidget(self.right_editor)
+
+
         self.branchesMenu = QWidget()
         self.branchesMenuLayout = QHBoxLayout()
         self.branchesMenu.setLayout(self.branchesMenuLayout)
@@ -577,19 +655,6 @@ class CustomMainWindow(QMainWindow):
         self.branchesMenuLayout.addWidget(self.leftBranchSelector)
         self.branchesMenuLayout.addWidget(self.rightBranchSelector)
 
-        self.comparison_area = QSplitter(Qt.Horizontal)
-
-        # QScintilla editor setup
-        # ------------------------
-
-        # ! Make instance of QsciScintilla class!
-        self.left_editor = EditorWidget(parent=self)
-
-        self.right_editor = EditorWidget(parent=self)
-
-        self.comparison_area.addWidget(self.left_editor)
-        self.comparison_area.addWidget(self.right_editor)
-
         # ! Add editor to layout !
         self.__lyt.addWidget(self.branchesMenu)
         self.__lyt.addWidget(self.comparison_area)
@@ -604,6 +669,7 @@ class CustomMainWindow(QMainWindow):
     ''''''
 
     def loadFiles(self, args):
+        print("loading files")
         if args is None:
             #self.filepath = ""
             pass
@@ -614,8 +680,12 @@ class CustomMainWindow(QMainWindow):
     def calcDiffSize(self, filename):
         lines1 = getFromGit(self.gitpath, self.branch1, filename)
         lines2 = getFromGit(self.gitpath, self.branch2, filename)
-        left, right, flags = aligner(lines1, lines2)
-        return flags.count(True)
+        try:
+            left, right, flags = aligner(lines1, lines2)
+            return flags.count(True)
+        except TypeError:
+            print("Aligner timed out")
+            return 0
 
     def updateDiffSize(self, i, size):
         item = self.file_list.item(i)
@@ -623,6 +693,7 @@ class CustomMainWindow(QMainWindow):
             item.setText(self.files[i].strip()+": (%i)"%size)
 
     def updateDiffView(self):
+        print("update diff")
         lines1=[""]
         lines2=[""]
         editorPosition = self.left_editor.editor.verticalScrollBar().value()
@@ -633,10 +704,13 @@ class CustomMainWindow(QMainWindow):
         else:
             lines1 = getFromGit(self.gitpath, self.branch1, self.filepath)
             lines2 = getFromGit(self.gitpath, self.branch2, self.filepath)
-        left, right, flags = aligner(lines1, lines2)
-        self.left_editor.updateText( left,  self.branch1, self.filepath, fileSuffix=self.filepath.split(".")[-1])
-        self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
         
+        try:
+            left, right, flags = aligner(lines1, lines2)
+            self.left_editor.updateText( left,  self.branch1, self.filepath, fileSuffix=self.filepath.split(".")[-1])
+            self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
+        except TypeError:
+            print("Aligner timed out")
         self.left_editor.editor.verticalScrollBar().setValue(editorPosition)
 
     def updateAfterEdit(self):
@@ -647,6 +721,7 @@ class CustomMainWindow(QMainWindow):
         self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
 
     def updateBranches(self, *args):
+        
         # store editor file position
         editorPosition = self.left_editor.editor.verticalScrollBar().value()
 
@@ -658,7 +733,8 @@ class CustomMainWindow(QMainWindow):
             self.files = getDivergedFiles(self.gitpath, self.branch1, self.branch2)
         else:
             self.files = getChangedFilesFromGit(self.gitpath, self.branch1, self.branch2, locallyChangedOnly=self.localChangesCheckbox.isChecked())
-            
+        
+        print("collecting files")
         #print(self.files)
         ignore_list=["hex"]
         for f in self.files:
@@ -678,10 +754,15 @@ class CustomMainWindow(QMainWindow):
         if self.filepath in filenames:
             print("reselect file " + self.filepath)
             findex = filenames.index(self.filepath)
+            
+            oldState = self.file_list.blockSignals(True)
             self.file_list.setCurrentRow(findex)
+            self.file_list.blockSignals(oldState)
             self.updateDiffView()
             # reset editor scroll position
             self.left_editor.editor.verticalScrollBar().setValue(editorPosition)
+        else: 
+            print("cannot reselect file: not found.", self.filepath)
         self.updateThread.restart=True
         self.updateThread.start()
 
