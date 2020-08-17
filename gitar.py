@@ -9,6 +9,7 @@ from PyQt5.Qsci import *
 import difflib
 import os, sys, subprocess,  os.path
 import re
+from collections import defaultdict
 
 def aligner(lines1, lines2):
     diffs = difflib._mdiff(lines1, lines2)
@@ -137,16 +138,34 @@ def abbreviateString(s, length=40):
     else:
         return s
         
+class GitAnnotation:
+    line   = 0
+    commit = ""
+    author = ""
+    date   = ""
+    time   = ""
+    code   = ""
+
 def getGitBlame(branch = "", file=""):
     re_blame = re.compile(r"([0-9a-f]+)[\s]+\(([a-zA-Z\s+]+)\s+(\d+\-\d+-\d+)\s(\d+\:\d+\:\d+)\s([\+\-0-9]+)\s+(\d+)\)(.*)")
     
     
-    output = runCommand('git blame -c ' + branch + ' -- '+file)
+    output = runCommand('git blame -cl ' + branch + ' -- '+file)
     output = output.splitlines()
     
+    annotation = []
     for ln, l in enumerate(output):
         parse = re_blame.match(l).groups()
-        print(ln,": ", parse)
+        annot = GitAnnotation()
+        annot.line = ln
+        annot.commit = parse[0]
+        annot.author = parse[1]
+        annot.date   = parse[2]
+        annot.time   = parse[3]
+        annot.code   = parse[6]
+        annotation.append(annot)
+        
+    return annotation
 
 class EditorWidget(QWidget):
     def __init__(self, parent=None):
@@ -154,7 +173,21 @@ class EditorWidget(QWidget):
         self.parent=parent
         self.lexers={"cpp":QsciLexerCPP(), "python":QsciLexerPython()}
         self.suffixToLexer={"c":"cpp", "h":"cpp", "cpp":"cpp", "py":"python", "sh":"bash"}
-
+        colormap = ['77AADD', '99DDFF', '44BB99', 'BBCC33', 'AAAA00', 'EEDD88', 'EE8866', 'FFAABB', 'DDDDDD']
+        
+        self.authorColors = [QsciStyle() for x in colormap]
+        for index, x in enumerate(colormap):
+            self.authorColors[index].setPaper(QColor("#ff"+x))
+            self.authorColors[index].setColor(QColor("#ff000000"))
+            
+        self.timelineColors = [QsciStyle() for x in range(0, 15)]
+        for index, x in enumerate(self.timelineColors):
+            r=128
+            g=int(255-(index*100/len(self.timelineColors)))
+            b=128
+            self.timelineColors[index].setPaper(QColor("#88{:02X}{:02X}{:02X}".format(r,g,b)))
+            self.timelineColors[index].setColor(QColor("#88000000"))
+            
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
         self.toolbar=QWidget()
@@ -162,7 +195,9 @@ class EditorWidget(QWidget):
         self.toolbar.setLayout(self.toolbarLayout)
         self.label = QLabel()
         self.editor = QsciScintilla()
+        
         self.configureEditor(self.editor)
+        
         self.filename=None
         self.rawText=None
         self.saveButton = QPushButton("save")
@@ -182,6 +217,11 @@ class EditorWidget(QWidget):
         self.toolbarLayout.setContentsMargins(0, 0, 0, 0)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
+        self.marginTextStyle= QsciStyle()
+        self.marginTextStyle.setPaper(QColor("#ffFF8888"))
+
+        
+
         if parent is not None: # connect to update for text change
             self.editor.textChanged.connect(self.parent.updateAfterEdit)
 
@@ -191,8 +231,16 @@ class EditorWidget(QWidget):
         editor.setLexer(self.__lexer)
         #editor.setMarginType(1, QsciScintilla.TextMargin)
         editor.setMarginType(1, QsciScintilla.SymbolMargin)
-        editor.setMarginMarkerMask(1, 0b1111)
-        editor.setMarginMarkerMask(0, 0b1111)
+        editor.setMarginType(2, QsciScintilla.TextMargin) #margin for author/blame info
+        editor.setMarginType(3, QsciScintilla.SymbolMargin) #margin for timeline coloring
+        
+        editor.setMarginSensitivity(3, True) # make time line margin clickable
+        editor.marginClicked.connect(self.timelineLeftClick)
+        editor.marginRightClicked.connect(self.timelineRightClick)
+        
+        editor.setMarginMarkerMask(1, 0b11)
+        editor.setMarginMarkerMask(0, 0b11)
+        editor.setMarginMarkerMask(3, 0b11111111111111100)
         editor.setMarginsForegroundColor(QColor("#ffFF8888"))
         editor.markerDefine(QsciScintilla.Background, 0)
         editor.setMarkerBackgroundColor(QColor("#22FF8888"),0)
@@ -200,12 +248,33 @@ class EditorWidget(QWidget):
         editor.markerDefine(QsciScintilla.Rectangle, 1)
         editor.setMarkerBackgroundColor(QColor("#ffFF8888"),1)
         editor.setMarkerForegroundColor(QColor("#ffFF8888"),1)
+        
+        for idx, col in enumerate(self.timelineColors):
+            editor.markerDefine(QsciScintilla.Rectangle, idx+3)
+            editor.setMarkerBackgroundColor(col.paper(),idx+3)
+            editor.setMarkerForegroundColor(col.color(),idx+3)
+            
         editor.setUtf8(True)  # Set encoding to UTF-8
         #editor.indicatorDefine(QsciScintilla.FullBoxIndicator, 0)
         #editor.indicatorDefine(QsciScintilla.BoxIndicator, 0)
         editor.indicatorDefine(QsciScintilla.StraightBoxIndicator, 0)
         editor.setIndicatorForegroundColor(QColor("#44FF8888"),0)
         editor.setAnnotationDisplay(QsciScintilla.AnnotationStandard)
+
+    def timelineLeftClick(self, margin_nr, line_nr, state):
+        if self.blame is not None:
+            ln = self.blame[line_nr]
+            print(line_nr, ln.commit, ln.date, ln.time, ln.author)
+            self.parent.branch2 = ln.commit
+            self.parent.rightBranchSelector.setCommit(ln.commit)
+            self.parent.updateDiffView()
+
+    def timelineRightClick(self, margin_nr, line_nr, state):
+        print("Margin clicked (right mouse btn)!")
+        print(" -> margin_nr: " + str(margin_nr))
+        print(" -> line_nr:   " + str(line_nr))
+        print("")
+
 
     def refreshText(self):
         self.updateText(self.rawText, self.branch, self.filename)
@@ -214,9 +283,31 @@ class EditorWidget(QWidget):
         self.editor.blockSignals(True) # turn off signals to avoid update loops
         self.branch = branch
         self.rawText = text
-        annotate = self.annotateCheckbox.isChecked()
-        if annotate:
-            getGitBlame(self.branch, filename)
+
+        self.blame = None
+        self.editor.setMarginWidth(2, 0) # hide blame margin by default
+        self.editor.setMarginWidth(3, 0)
+        authors = defaultdict(lambda: 0)
+        times = defaultdict(lambda: 0)
+        
+        if self.annotateCheckbox.isChecked():
+            self.blame = getGitBlame(self.branch, filename)
+            for ln in self.blame:
+                authors[ln.author] = authors[ln.author]+1  #count contributions, and sort top-down
+                times[ln.date] = 0
+                
+            sort_authors = sorted(authors.items(), key=lambda x: x[1], reverse=True)
+            sort_times = sorted(times.items(), key=lambda x: x[0], reverse=True)
+            #rebuild author dict with descending ID by contributions
+            for index, rec in enumerate(sort_authors):
+                authors[rec[0]] = [index, rec[1]]
+            # index all commit times new to old
+            for index, rec in enumerate(sort_times):
+                times[rec[0]] = index
+            #print(times.items())
+            #print(authors.items())
+            self.editor.setMarginWidth(2, "0000") # show blame margin
+            self.editor.setMarginWidth(3, "0000") # show timeline margin
         
         if self.branch == "":
             self.saveButton.setText("save")
@@ -238,8 +329,10 @@ class EditorWidget(QWidget):
             self.__lexer = self.lexers[self.suffixToLexer[fileSuffix]]
             self.editor.setLexer(self.__lexer)
             #label+="     ("+self.suffixToLexer[fileSuffix]+")"
-        marginTextStyle= QsciStyle()
-        marginTextStyle.setPaper(QColor("#ffFF8888"))
+        
+        
+        
+        self.editor.setMarginsBackgroundColor(QColor("#ff888888"))
         self.editor.clearAnnotations(-1)
         self.editor.setText("")
         self.label.setText(label)
@@ -270,7 +363,17 @@ class EditorWidget(QWidget):
                     self.editor.fillIndicatorRange(idx, ind_left, idx, ind_right, 0)
                 else:
                     self.editor.append(l)
-
+                    
+                bltag = ""
+                if self.blame is not None:
+                    author_idx= min(authors[self.blame[idx].author][0], len(self.authorColors)-1) # get color index 
+                    time_idx = min(times[self.blame[idx].date], len(self.timelineColors)-2)
+                    bltag = "".join([a[0] for a in self.blame[idx].author.split()])
+                    self.editor.setMarginText(idx, bltag, self.authorColors[author_idx])
+                    #self.editor.setMarginText(idx, bltag, self.timelineColors[time_idx])
+                    self.editor.markerAdd(idx, time_idx+3)
+                    #self.editor.fillIndicatorRange(idx, ind_left, idx, ind_right, 0)
+                    
                 if annotation is not None:
                     if (idx>0):
                         self.editor.annotate(idx-1, annotation, 0)
@@ -326,6 +429,14 @@ class BranchSelector(QWidget):
             self.branchesMenu.setCurrentIndex(index)
         else:
             print("selection not found")
+
+    def setCommit(self, commit):
+        index = [x[0] for x in self.gitlog].index(commit)
+        if index >= 0:
+            self.commitMenu.setCurrentIndex(index)
+            print("jumping to commit ", self.gitlog[index])
+        else:
+            print("commit not found", commit)
 
     def selectionChange(self, i):
         selectedBranch = self.branchesMenu.currentText()
@@ -514,6 +625,8 @@ class CustomMainWindow(QMainWindow):
     def updateDiffView(self):
         lines1=[""]
         lines2=[""]
+        editorPosition = self.left_editor.editor.verticalScrollBar().value()
+        
         if self.filepath is None or self.filepath =="":
             lines1 = []
             lines2 = []
@@ -523,6 +636,8 @@ class CustomMainWindow(QMainWindow):
         left, right, flags = aligner(lines1, lines2)
         self.left_editor.updateText( left,  self.branch1, self.filepath, fileSuffix=self.filepath.split(".")[-1])
         self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
+        
+        self.left_editor.editor.verticalScrollBar().setValue(editorPosition)
 
     def updateAfterEdit(self):
         lines1 = self.left_editor.getText()
