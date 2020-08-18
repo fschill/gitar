@@ -22,7 +22,6 @@ import functools
 def result_as_param(func, queue, *args, **kwargs):
     result = (func(*args, **kwargs))
     queue.put(result)
-    print("returned. Result=", len(result))
 
 def timeout(max_timeout):
     """Timeout decorator, parameter in seconds."""
@@ -77,7 +76,6 @@ def aligner(lines1, lines2):
             
     #for l in fromlist:
     #    print([l])
-    print("aligner done")
     return fromlist, tolist, flaglist
 
 class cd:
@@ -114,19 +112,19 @@ def getChangedFilesFromGit(path_to_repository, branch1, branch2, locallyChangedO
     try:
         with cd(path_to_repository):
             if branch1=="" and branch2=="":
-                lines = subprocess.check_output('git diff --name-only', shell=True).decode('utf-8').splitlines()
+                lines = subprocess.check_output('git diff --ignore-space-at-eol -G. --name-only', shell=True).decode('utf-8').splitlines()
             elif branch1 == "":
-                    lines = subprocess.check_output('git diff --name-only %s'%branch2, shell=True).decode('utf-8').splitlines()
+                    lines = subprocess.check_output('git diff --ignore-space-at-eol -G. --name-only %s'%branch2, shell=True).decode('utf-8').splitlines()
             else:
                 if branch1==".":
                     branch1  = getGitCurrentBranch()
                 if branch2==".":
                     branch2  = getGitCurrentBranch()
                 if locallyChangedOnly:
-                    lines = subprocess.check_output('git diff --name-only %s...%s' % (branch2, branch1), shell=True).decode(
+                    lines = subprocess.check_output('git diff --ignore-space-at-eol -G. --name-only %s...%s' % (branch2, branch1), shell=True).decode(
                     'utf-8').splitlines()
                 else:
-                    lines = subprocess.check_output('git diff --name-only %s %s' % (branch1, branch2), shell=True).decode(
+                    lines = subprocess.check_output('git diff --ignore-space-at-eol -G. --name-only %s %s' % (branch1, branch2), shell=True).decode(
                         'utf-8').splitlines()
         return [l+"\n" for l in  lines]
     except:
@@ -721,7 +719,7 @@ class CustomMainWindow(QMainWindow):
         self.right_editor.updateText(right, self.branch2, self.filepath, fileSuffix=self.filepath.split(".")[-1])
 
     def updateBranches(self, *args):
-        
+        self.updateThread.restart=True
         # store editor file position
         editorPosition = self.left_editor.editor.verticalScrollBar().value()
 
@@ -755,15 +753,15 @@ class CustomMainWindow(QMainWindow):
             print("reselect file " + self.filepath)
             findex = filenames.index(self.filepath)
             
-            oldState = self.file_list.blockSignals(True)
+            self.file_list.blockSignals(True)
             self.file_list.setCurrentRow(findex)
-            self.file_list.blockSignals(oldState)
+            self.file_list.blockSignals(False)
             self.updateDiffView()
             # reset editor scroll position
             self.left_editor.editor.verticalScrollBar().setValue(editorPosition)
         else: 
             print("cannot reselect file: not found.", self.filepath)
-        self.updateThread.restart=True
+        
         self.updateThread.start()
 
     ''''''
