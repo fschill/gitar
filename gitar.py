@@ -739,8 +739,9 @@ class CustomMainWindow(QMainWindow):
             # if comparing to working copy, only show files that exist locally
             exist=True
             size=0
-            if self.branch1=="" or self.branch2=="":
-                exist = os.path.isfile(self.gitpath+f.strip())
+            # NOTE: commented out as it caused bugs in list view (disappearing files)
+            #if self.branch1=="" or self.branch2=="":
+            #    exist = os.path.isfile(self.gitpath+f.strip())
 
             #if exist and not (f.strip().split(".")[-1]  in ignore_list):
             #    size=self.calcDiffSize(f)
